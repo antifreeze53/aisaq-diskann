@@ -1,0 +1,106 @@
+■シナリオ
+やったこと
+質問
+
+やったこと
+　DRAMベース検索とAiSAQ（SSD内インデックス）のパフォーマンス・DRAM使用量を比較
+
+## ファイル構成
+- `setup_environment.py`: Cどら直下に作業dir作成。venv作成。pythonパッケージ(DRAM用のfaiss、psuitil、pandasなど)
+- `install_aisaq.py`: gitリポジトリからclone、buildのためのnuget。
+- `benchmark.py`: ベンチマーク実行スクリプト
+- `analyze_results.py`: 結果分析・レポート生成
+- `aisaq_wrapper.py`: AiSAQ APIラッパー
+
+実行内容としては、仮想的なベクトルデータを作成して、DRAMとAiSAQのパフォーマンスを見たんだけど、
+実際はAiSAQ側のインデックスが作れず、fallbackしてたってこと？
+
+■作業
+windowsビルドがうまくいかず
+
+wsl -l -vで一覧
+wslでubuntu(wsl -d Ubuntu-22.04
+sudo apt install liburing-dev★やったかな
+sudo apt install make cmake g++ libaio-dev libgoogle-perftools-dev clang-format libboost-all-dev
+python install_aisaq.py https://github.com/kioxia-jp/aisaq-diskann
+Cドライブにgitからclone
+README.md と workflows/SSD_index.md の内容を日本語でまとめた README.ja.md / workflows/SSD_index.ja.md を作成。
+Windows での依存 (NuGet.exe→ PATH、bash、WSL) と PowerShell向けコマンドの注意点を説明。
+ただwindowsはうまくいかず諦め
+WSL（Ubuntu 22.04）を使って依存を apt で揃え、build ディレクトリを消す
+cmake --build buildでビルド
+確かwgetでファイル取得
+データをダウンロード・展開・bin変換。
+
+mkdir -p ~/aisaq/data/sift
+cd ~/aisaq/data/sift
+cp /mnt/c/AiSAQ_Test/aisaq/DiskANN/build/data/sift/*.fvecs ~/aisaq/data/sift/
+  cd /mnt/c/AiSAQ_Test/aisaq/build/apps/utils
+  ./fvecs_to_bin float ~/aisaq/data/sift/sift_learn.fvecs ~/aisaq/data/sift/sift_learn.fbin
+  ./fvecs_to_bin float ~/aisaq/data/sift/sift_query.fvecs ~/aisaq/data/sift/sift_query.fbin
+グラウンドトゥルースを計算。
+./compute_groundtruth --data_type float --dist_fn l2 --base_file ~/aisaq/data/sift/sift_learn.fbin --query_file ~/aisaq/data/sift/sift_query.fbin --gt_file ~/aisaq/data/sift/sift_query_learn_gt100 --K 100
+cd /mnt/c/AiSAQ_Test/aisaq/build
+インデックス
+./apps/build_disk_index --data_type float --dist_fn l2 --data_path ~/aisaq/data/sift/sift_learn.fbin --index_path_prefix ~/aisaq/data/sift/disk_index_sift_learn_R32_L50_A1.2 -R 32 -L 50 -B 0.003 -M 1
+検索
+./apps/search_disk_index --data_type float --dist_fn l2 --index_path_prefix ~/aisaq/data/sift/disk_index_sift_learn_R32_L50_A1.2 --query_file ~/aisaq/data/sift/sift_query.fbin --gt_file ~/aisaq/data/sift/sift_query_learn_gt100 -K 10 -L 10 20 30 40 50 100 --result_path ~/aisaq/data/sift/res --num_nodes_to_cache 10000
+
+■結果(SSD Index) ★メモリ使用量は出ないんだね
+    L   Beamwidth             QPS    Mean Latency    99.9 Latency        Mean IOs         CPU (s)       Recall@10
+======================================================================================================================
+    10           2        27723.95         2271.92         4700.00            8.81           40.47           81.79
+    20           2        15369.23         4121.04         7576.00           15.93           61.60           96.42
+    30           2        10335.75         6147.14        11424.00           23.30           74.96           98.78
+    40           2         7684.18         8278.83        14714.00           30.78           94.27           99.40
+    50           2         6421.66         9913.28        16550.00           38.35          116.86           99.63
+   100           2         3337.98        19107.81        29292.00           76.59          226.88           99.91
+100kのSIFTデータから10kのクエリをK=10で探してる。
+QPSが1秒当たりのクエリ数でL10なら28k処理できてる。
+Lは近傍候補を何個まで覚えてるか？のあたり、小さいと高速&ＩＯ少な目だけど漏れる
+
+apps/utils/fvecs_to_bin
+ → compute_groundtruth → build_disk_index → search_disk_index 
+を順に実行して動作確認。必要なら出たログやエラーを教えて。
+
+■手順書確認
+workflowsフォルダ内のドキュメントは、同じDiskANN実行ファイル群（build_disk_index / build_memory_index / search_* など）に対し、
+目的別に引数を変えた手順を整理したもの。
+SSD/In-memory/AiSAQ/フィルター/動的インデックスでは、
+データ変換→ground truth生成→ビルド→検索という共通フローを踏みながらオプションを追加している。
+REST API は構築済みインデックスをHTTPで公開し、Pythonはdiskannpyというバインディングから同じ処理を呼び出す構成で、
+それぞれ既存の成果物を再利用する形。
+
+■理解してきた
+今ってwindowsのCドライブをWSLのmntにマウントして使ってて、効率が悪い
+wslの中にaisaqのcloneを作成して、vscode remote -wslでアクセスしたほうがいいね
+cloneじゃなくて、一旦自分のリモートにfolkを作成して、それをcloneすることにした
+wslのcd ~でホーム移動して
+mkdir -p projects
+~/projects/aisaq-diskannにcloneした
+あと、本家もあったほうがいいと思うから、それもclone
+一旦winmargeで比較してみた
+
+差分
+aisaq.h,include,左側のみ: \\wsl.localhost\Ubuntu-22.04\home\shige\projects\aisaq-diskann\include,* 2025/11/21 13:32:07,  ,h
+aisaq_pq_reader.h,include,左側のみ: \\wsl.localhost\Ubuntu-22.04\home\shige\projects\aisaq-diskann\include,* 2025/11/21 13:32:07,  ,h
+aisaq_utils.h,include,左側のみ: \\wsl.localhost\Ubuntu-22.04\home\shige\projects\aisaq-diskann\include,* 2025/11/21 13:32:07,  ,h
+aisaq_pq_reader.cpp,src,左側のみ: \\wsl.localhost\Ubuntu-22.04\home\shige\projects\aisaq-diskann\src,* 2025/11/21 13:32:07,  ,cpp
+aisaq_utils.cpp,src,左側のみ: \\wsl.localhost\Ubuntu-22.04\home\shige\projects\aisaq-diskann\src,* 2025/11/21 13:32:07,  ,cpp
+AiSAQ_index.md,workflows,左側のみ: \\wsl.localhost\Ubuntu-22.04\home\shige\projects\aisaq-diskann\workflows,* 2025/11/21 13:32:07,  ,md
+
+hファイルは構造の定義、cppが実際の処理。cppの二つのまとめは以下
+項目	src/aisaq_pq_reader.cpp	src/aisaq_utils.cpp
+目的	検索時に PQ ベクトルを非同期 I/O でメディアから読み出す処理（AIO/Uring）	AiSAQ インデックスの再配置・ファイル整形・マップ生成など事前処理
+キー処理	コンテキスト管理（バッファ・ページキャッシュ・イベント）、重複 I/O フック、完了待ち, ドライブブロックサイズ取得	再配置マップ生成（ソーター・スコア）、逆マップ、インライン PQ 数計算、ページアライン済み PQ ファイル書き出し、ID ファイル書き換え
+キャッシュ	ページ単位の LRU キャッシュ＋空きバッファ再利用	N/A（再配置マップ結果がキャッシュ効率向上に寄与）
+I/O	libaio/liburing での非同期読み出し submit/wait/done	ファイル読み書き（ifstream/open+write、O_DIRECT）してページアライン済みファイルを生成
+関連設定	aisaq.h 定義のキャッシュサイズ、再配置ページサイズ、IOエンジン選択	同じく aisaq.h の再配置ソーター・IOエンジン列挙を使いつつ、PQ 配列や medoid ファイルを再割当て
+
+■ビルド
+sudo apt install liburing-dev
+sudo apt install make cmake g++ libaio-dev libgoogle-perftools-dev clang-format libboost-all-dev
+sudo apt install libmkl-full-dev
+mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Release .. && make -j 
+
+■実行

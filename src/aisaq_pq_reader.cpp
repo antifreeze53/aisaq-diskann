@@ -776,11 +776,12 @@ int aisaqPQReader::init_common(const char *pq_file_path, bool rearranged)
              major(file_stat.st_dev), minor(file_stat.st_dev));
     int fd = open(device_path, O_RDONLY);
     if (fd <= 0) {
-        std::cerr << "failed to detect PQ vectors file block size" << std::endl;
-        return -1;
+        std::cerr << "failed to detect PQ vectors file block size, using default 4096" << std::endl;
+        m_block_size = 4096;
+    } else {
+        ioctl(fd, BLKSSZGET, &m_block_size);
+        close(fd);
     }
-    ioctl(fd, BLKSSZGET, &m_block_size);
-    close(fd);
 
     /* init m_num_vectors, m_pq_vector_size, m_rearranged_pq_page_size */
     fd = open(pq_file_path, O_RDONLY);
